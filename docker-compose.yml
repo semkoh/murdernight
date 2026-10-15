@@ -1,0 +1,70 @@
+# MurderNight : 1 front, 3 microservices, 2 bases de données
+services:
+  # ---------- Base de données 1 : utilisateurs ----------
+  db-auth:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: auth
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: ${DB_AUTH_PASSWORD:-auth_pwd}
+    volumes: [db-auth-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth"]
+      interval: 5s
+      retries: 10
+
+  # ---------- Base de données 2 : jeu (parties, personnages, indices, votes) ----------
+  db-metier:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: metier
+      POSTGRES_USER: metier
+      POSTGRES_PASSWORD: ${DB_METIER_PASSWORD:-metier_pwd}
+    volumes: [db-metier-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metier"]
+      interval: 5s
+      retries: 10
+
+  # ---------- Microservice 1 : API Auth (Python) ----------
+  api-auth:
+    build: ./api-auth
+    environment:
+      DATABASE_URL: postgresql://auth:${DB_AUTH_PASSWORD:-auth_pwd}@db-auth:5432/auth
+      JWT_SECRET: ${JWT_SECRET:-change-moi-en-production}
+      INTERNAL_KEY: ${INTERNAL_KEY:-cle-interne-dev}
+    depends_on:
+      db-auth: { condition: service_healthy }
+
+  # ---------- Microservice 2 : API Métier (Python) ----------
+  api-metier:
+    build: ./api-metier
+    environment:
+      DATABASE_URL: postgresql://metier:${DB_METIER_PASSWORD:-metier_pwd}@db-metier:5432/metier
+      INTERNAL_KEY: ${INTERNAL_KEY:-cle-interne-dev}
+    depends_on:
+      db-metier: { condition: service_healthy }
+
+  # ---------- Microservice 3 : BFF (TypeScript) ----------
+  bff:
+    build: ./bff
+    ports: ["${BFF_PORT:-3001}:3000"]
+    environment:
+      AUTH_URL: http://api-auth:8001
+      METIER_URL: http://api-metier:8002
+      INTERNAL_KEY: ${INTERNAL_KEY:-cle-interne-dev}
+      FRONT_ORIGIN: http://localhost:${FRONT_PORT:-5173},http://${PUBLIC_HOST:-localhost}:${FRONT_PORT:-5173}
+    depends_on: [api-auth, api-metier]
+
+  # ---------- Front web (React) ----------
+  front:
+    build:
+      context: ./front
+      args:
+        VITE_API_URL: http://${PUBLIC_HOST:-localhost}:${BFF_PORT:-3001}
+    ports: ["${FRONT_PORT:-5173}:80"]
+    depends_on: [bff]
+
+volumes:
+  db-auth-data:
+  db-metier-data:
